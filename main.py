@@ -58,7 +58,16 @@ if __name__ == '__main__':
                                           )
                     
             case 'difference':
-                print("two")
+                if(r["spacecraft"]=="SA" or r["spacecraft"]=="SB"):
+                    print("Rdifs SECCHI prep function")
+                    secchi_prep.create_running_differences(
+                        dates,
+                        content["data_directory"]+"Rdif/"+constants.spacecrafts[r["spacecraft"]]+"/"+r["instrument"]+"/"+r["data_type"]+"/",
+                        r["spacecraft"],
+                        r["instrument"],
+                        r["data_type"]
+
+                    )
             case default:
                 print("something")
 

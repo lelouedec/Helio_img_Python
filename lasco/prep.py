@@ -2,19 +2,36 @@ from natsort import natsorted
 import glob 
 from astropy.io import fits 
 from .C3_prep import * 
+from .C2_prep import * 
+
 import matplotlib.pyplot as plt 
 import matplotlib
+from skimage.transform import resize
+import time 
 
 matplotlib.use("Qt5Agg")
 
 
 
 def lasco_prep(dates,path,swdir,ins):
+    calibfacdir = swdir+"soho/lasco/calib/"
+
+    if not os.path.exists(calibfacdir):
+        os.makedirs(calibfacdir)
+
+    num_cpus = cpu_count()
+    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".dat",calibfacdir)
+    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".fts",calibfacdir)
+    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".txt",calibfacdir)
+
+    
 
     for d in dates:
+        savepath = path + d
 
         files_list = natsorted(glob.glob(path.replace("L1","L0")+str(d)+"/*"))
         for f in files_list:
+            print(f)
             hdul = fits.open(f)
             data = hdul[0].data
             header = hdul[0].header
@@ -78,17 +95,61 @@ def lasco_prep(dates,path,swdir,ins):
             #     inc += 1
 
             if ins=="C3":
-                data =  C3_CALIBRATE(data,header,swdir)
-                data = C3_warp(data,header)
+                if data.shape[0]==1024:
+                    data =  C3_CALIBRATE(data,header,swdir)
+                    data = C3_warp(data,header)
 
-                xnorm = 518.0		# IDL coordinates
-                ynorm = 531.5		# nbr, 27Jul00
-                mbstrings=1
-                plt.imshow(find_miss_blocks(data,header))
-                plt.show()
-            
+                    # xnorm = 518.0		# IDL coordinates
+                    # ynorm = 531.5		# nbr, 27Jul00
+                    # mbstrings=1
+                    # plt.imshow(find_miss_blocks(data,header))
+                    # plt.show()
+                    # print(path+header["filename"])
+                    # exit()
+                
+                    for i in range(0,len(header["history"])):
+                        header["history"][i] = header["history"][i].replace("\t","")
+                
+                    if not os.path.exists(savepath):
+                        os.makedirs(savepath)
+                    fits.writeto(savepath+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
+            elif ins=="C2":
+                data =  C2_CALIBRATE(data,header,swdir)
+                data = C2_warp(data,header)
+                # name_mask = get_cal_name('C3_cl*msk*.dat',yymmdd,swdir)
+                # mask_hdul = fits.open(name_mask)
+                # mask_data = mask_hdul[0].data
+                # mask_data = C2_warp(mask_data,header)
+               
+                zz = np.where(data <= 0)
+                maskall = np.ones((header["NAXIS1"],header["NAXIS2"]))
+                print(maskall.shape)
+                # Check if there is more than one index
+                if zz[0].size > 1:     
+                    maskall[zz] = 0.0 
 
-            # exit()
+                cols = data.shape[1] // 32
+                rows = data.shape[0] // 32
+                
+                # Replace REBIN with a proper resizing function
+                data2 = resize(data, (rows, cols))
+                zblocks = np.where(data2 <= 0)
+                if zblocks[0].size>0:
+                    if summing >1:
+                        nmissing = zblocks[0].size - 8
+                    else:
+                        nmissing = zblocks[0].size
+                if(nmissing>17):
+                    # maskall = np.ones((32,32))
+                    # maskall[zblocks] = 0.0
+                    # maskall = resize(maskall,(1024,1024))
+                    maskall = C2_warp(maskall,header)
+                    maskall[maskall<0] = 0.0
+                data = data*maskall
+                if not os.path.exists(savepath):
+                    os.makedirs(savepath)
+                fits.writeto(savepath+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
+
 
 
 # // camera= strupcase(strtrim(hdr.detector,2))

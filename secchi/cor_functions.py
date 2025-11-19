@@ -1,6 +1,6 @@
 from datetime import datetime,timedelta
 from .secchi_functions import * 
-
+import  matplotlib.pyplot as plt 
 
 
 def cor_prep(data,header,post_conj, calpath, pointpath,ftpsc):
@@ -10,10 +10,12 @@ def cor_prep(data,header,post_conj, calpath, pointpath,ftpsc):
 
     ## chose mean, probably not the best choice but fuck it
     missing = scc_get_missing(header)
-
-
     if(header['MISSLIST'] != ''):
         data[missing] = np.nanmean(data)
+
+    
+    #COR2 calibrate
+    data,header = cor_calibrate(data,header,post_conj,calpath)
 
     data =  cor2_warp(data,header,ftpsc)
     # data,header = scc_roll_image(data,header)
@@ -29,6 +31,44 @@ def cor_prep(data,header,post_conj, calpath, pointpath,ftpsc):
    
     return data, header
 
+def cor_calibrate(data,header,post_conj,calpath,exptime_off=False,bias_off=False,calimg_off=False,calfac_off=False):
+
+    data,header = scc_sebip(data,header)
+    if(exptime_off):
+        exptime = 1.0
+    else:
+        exptime = header["EXPTIME"]
+
+    if exptime != 1.0:
+        header['HISTORY'] = 'Exposure Normalized to 1 Second '+ str(exptime)
+    
+    if bias_off:
+        bias = 0.0
+    else:
+        bias = get_biasmean(header)
+
+    if bias != 0.0:
+        header['HISTORY'] = 'Bias Subtracted '+ str(bias)
+        header["OFFSETCR"]=bias
+
+    if calimg_off:
+        calimg = 1.0
+    else:
+        calimg,cal_version = get_calimg(header,calpath,post_conj)
+    if(calimg.shape[0]>1):
+        header['HISTORY'] = 'Applied Vignetting '+ str(bias)
+
+    if calfac_off:
+        calfac = 1.0
+    else:
+        calfac,header = get_calfac(header)
+    
+    if calfac != 1.0:
+        header['HISTORY'] = 'Applied Calibration Factor '+ str(calfac)
+    
+    data = (data - bias)*calfac/exptime * calimg
+    
+    return data,header
 
 def update_polariz_header(hdrs,polval,taiend,date_avg):
     hdr = hdrs[0].copy()

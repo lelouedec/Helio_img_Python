@@ -28,8 +28,9 @@ def multi_process_dl(num_cpus,url,ext,path_dir):
     urls = listfd(url, ext)
     inputs = zip(repeat(path_dir), urls)
 
+
     try:
-        results = pool.starmap(fetch_url, inputs, chunksize=5)
+        results = pool.starmap(fetch_url, inputs, chunksize=2)
 
     except ValueError:
         print("There was an error multiprocessing lol ")
@@ -108,6 +109,11 @@ def download_files(datelist, save_path, ftpsc, ins, bflag, silent=True):
             elif ins == 'C3':
                 date_lasco = date[2:]
                 url  = "https://lasco-www.nrl.navy.mil/lz/level_05/"+str(date_lasco)+"/c3/"
+                ext  = '.fts'
+
+            elif ins == 'C2':
+                date_lasco = date[2:]
+                url  = "https://lasco-www.nrl.navy.mil/lz/level_05/"+str(date_lasco)+"/c2/"
                 ext  = '.fts'
         
         if not os.path.exists(path_dir):

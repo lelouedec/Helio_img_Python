@@ -5,6 +5,10 @@ import numpy as np
 from astropy.io import fits
 from scipy.ndimage import zoom
 from datetime import datetime
+import matplotlib.pyplot as plt 
+
+
+
 
 def get_calfac(hdr, conv='MSB', silent=True):
 
@@ -1464,15 +1468,21 @@ def get_smask(hdr, calpath, post_conj, silent=True):
     
     fullm[xy[1] - 1:y1, xy[0] - 1:x1] = smask
 
+    
 
-
-    if post_conj and hdr['DETECTOR'] != 'EUVI':
+    date_header = datetime.strptime(hdr['DATE-OBS'], '%Y-%m-%dT%H:%M:%S.%f')
+    date_1 = datetime.strptime("2015-05-19", '%Y-%m-%d')
+    date_2 = datetime.strptime("2023-08-12", '%Y-%m-%d')
+  
+  
+    if date_header>=date_1 and date_header<date_2 and hdr['DETECTOR'] != 'EUVI':
         fullm = np.rot90(fullm, 2)
-
 
     mask = rebin(fullm[hdr['R1ROW']-1:hdr['R2ROW'],hdr['R1COL']-1:hdr['R2COL']], (hdr['NAXIS1'], hdr['NAXIS2']))
 
-    if(hdr["DETECTOR"]=="COR2"):
+   
+
+    if(hdr["DETECTOR"]=="COR2" and hdr['OBSRVTRY'] == 'STEREO_A'):
 
 
         x_shape = hdr["NAXIS1"]
@@ -1495,6 +1505,8 @@ def get_smask(hdr, calpath, post_conj, silent=True):
         mask = np.ones((x_shape, y_shape), dtype=bool)
         mask[(xx - center_x) ** 2 + (yy - center_y) ** 2 < inner_radius] = 0
         mask[(xx - center_x) ** 2 + (yy - center_y) ** 2 > outer_radius] = 0
+
+    
 
     return mask
 
@@ -1824,7 +1836,7 @@ def get_calimg(header, calpath, post_conj, silent=True):
     @return: Array to correct for calibration
     """
 
-
+    sumflg = 0
     if header['DETECTOR'] == 'HI1':
 
         if header['summed'] == 1:
@@ -1843,9 +1855,17 @@ def get_calimg(header, calpath, post_conj, silent=True):
             cal_version = '20150701_flatfld_sum_h2' + header['OBSRVTRY'][7].lower() + '.fts'
             sumflg = 1
 
+    elif header['DETECTOR'] == 'COR2':
+        if header['OBSRVTRY'] == 'STEREO_A':
+            cal_version = '20060929_vignet'
+        else:
+            cal_version = '20140723_vignet'
+
+        tail = '_vCc2'+header["OBSRVTRY"][7]+'.fts'
+        cal_version = cal_version + tail
     else:
         ## TODO Implement get_calimg for other detectors
-        print('get_calimg not implemented for detectors other than HI-1, HI-2.')
+        print('get_calimg not implemented for detectors other than HI-1, HI-2, COR2')
         exit()
 
 
@@ -1913,7 +1933,7 @@ def get_calimg(header, calpath, post_conj, silent=True):
   
     return cal, cal_version
 
-def scc_sebip(data, header, silent):
+def scc_sebip(data, header, silent=True):
     """Direct conversion of scc_sebip.pro for IDL.
     Determines what has happened in terms of on-board sebip binning and corrects it.
     Takes image data and header as input and returns fixed image.

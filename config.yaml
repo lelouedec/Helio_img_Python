@@ -1,36 +1,41 @@
-output_directory: data/stereo_processed/
-data_directory: data/
+output_directory: /Volumes/Data_drive/data/stereo_processed/
+data_directory: /Volumes/Data_drive/data/
 solarsoft_directory: SolarSoftWare/
 
 
 
 runs:
+
+
+
 # - model: run1
 #   spacecraft: SA
 #   instrument: cor2
 #   data_type: science
 #   start_date: '20250531'
-#   end_date: '20250601'
+#   end_date: '20250531'
 #   background_length: 1
 #   task: reduction
 
-# - model: run2
-#   spacecraft: SA
-#   instrument: hi_1
-#   data_type: science
-#   start_date: '20250531'
-#   end_date: '20250601'
-#   background_length: 1
-#   task: reduction
 
-- model: run3
+- model: run1
   spacecraft: SO
-  instrument: C3
+  instrument: C2
   data_type: science
-  start_date: '20250531'
-  end_date: '20250601'
+  start_date: '20090218'
+  end_date: '20090218'
   background_length: 1
   task: reduction
+
+
+# - model: run1
+#   spacecraft: SO
+#   instrument: C3
+#   data_type: science
+#   start_date: '20250531'
+#   end_date: '20250531'
+#   background_length: 1
+#   task: reduction
 
 
 

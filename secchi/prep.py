@@ -10,8 +10,15 @@ import os
 import shutil
 from astropy.io import fits 
 from collections import Counter
+from natsort import natsorted 
+from scipy.ndimage import shift
+import cv2 
 
 
+def ignore_extended_attributes(func, filename, exc_info):
+    is_meta_file = os.path.basename(filename).startswith("._")
+    if not (func is os.unlink and is_meta_file):
+        raise
 
 def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silent=False,polarized=False):
         
@@ -209,21 +216,27 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
         ## TODO: Implement EUVI_PREP.pro
 
         if ins=='cor2':
+            print(post_conj)
             for i in range(len(clean_data)):
-                clean_data[i], clean_header[i]  = cor_prep(clean_data[i], clean_header[i], post_conj, calpath, pointpath,ftpsc)
+                clean_data[i], clean_header[i]  = cor_prep(clean_data[i], clean_header[i], post_conj[i], calpath, pointpath,ftpsc)
 
             if(polarized):
                 pbs = []
                 Bs = []
                 hdr_pbs = []
                 hdr_Bs = []
+                polars = [clean_header[i]["POLAR"] for i in range(0,len(clean_header))]
+                print(polars)
                 for i in range(0,len(clean_data),3):
-                    pbim,B, hdr_pb,hdr_B = cor_polariz_python([clean_header[i],clean_header[i+1],clean_header[i+2]], [clean_data[i],clean_data[i+1],clean_data[i+2]])
+                    try: 
+                        pbim,B, hdr_pb,hdr_B = cor_polariz_python([clean_header[i],clean_header[i+1],clean_header[i+2]], [clean_data[i],clean_data[i+1],clean_data[i+2]])
 
-                    pbs.append(pbim)
-                    Bs.append(B)
-                    hdr_pbs.append(hdr_pb)
-                    hdr_Bs.append(hdr_B)
+                        pbs.append(pbim)
+                        Bs.append(B)
+                        hdr_pbs.append(hdr_pb)
+                        hdr_Bs.append(hdr_B)
+                    except:
+                        print("error in polariz")
 
                 
                 # pbs, hdr_pbs = cor_calfac(pbs,hdr_pbs)
@@ -312,7 +325,7 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
     for d in tqdm.tqdm(range(0,len(datelist))):
 
         savepath = path + datelist[d] 
-        
+    
 
         if ins=="cor2" and bflag == "science":
             suffix = ['/*n4*.fts','/*d4*.fts']
@@ -337,8 +350,9 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
         
        
         #if there was already something in the folder, we remove it all and restart from scratch 
+        print(savepath + '/')
         if os.path.exists(savepath + '/'):
-            shutil.rmtree(savepath + '/')
+            shutil.rmtree(savepath + '/',onerror=ignore_extended_attributes)
             os.makedirs(savepath + '/')
 
         else:
@@ -363,10 +377,12 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
             hdul = fits.open(fitsfiles[i])
             if(len(hdul)>1):
                 if( 'd4' in fitsfiles[i]):
-                    hduls2.append(hdul)
+                    
                     try:
-                        hdul_data2.append(hdul[0].data)
-                        hdul_header2.append(hdul[0].header)
+                        if(hdul[0].data.shape[0]==2048):
+                            hduls2.append(hdul)
+                            hdul_data2.append(hdul[0].data)
+                            hdul_header2.append(hdul[0].header)
                     except TypeError:
                         print('Error reading file ', fitsfiles[i]) #happens if file is truncated, smaller than expected
                         continue
@@ -414,3 +430,86 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
 
             else:
                 continue
+
+
+
+def create_running_differences(datelist, path,ftpsc, ins, bflag):
+
+    fitsfiles = []
+    for d in range(0,len(datelist)):
+        savepath = path + datelist[d]
+
+        
+        for file in natsorted(glob.glob(savepath.replace("Rdif","L1") + "/*")):
+                fitsfiles.append(file)
+
+   
+    # cadence of instruments in minutes
+    if bflag == 'beacon':
+        if ins == 'hi_1' or ins == 'cor2':
+            cadence = 120.0
+        elif ins=='cor2':
+            cadence = 15
+
+    elif bflag == 'science':
+        if ins == 'hi_1':
+            cadence = 40.0
+        elif ins == 'hi_2':
+            cadence = 120.0
+        elif ins == 'cor2':
+            cadence = 15.0
+    maxgap = -3.5
+
+    data    = []
+    headers = []
+
+    for f in fitsfiles:
+        hdul = fits.open(f)
+        if ins == 'cor2' and 'd4' not in f:
+            data.append(hdul[1].data)
+
+        else:
+            data.append(hdul[0].data)              
+            headers.append(hdul[0].header)
+ 
+        hdul.close()
+
+    
+    for i in range(0,len(data)-1):
+
+        time1 = datetime.strptime(headers[i]['DATE-END'], '%Y-%m-%dT%H:%M:%S.%f')
+        time2 = datetime.strptime(headers[i+1]['DATE-END'], '%Y-%m-%dT%H:%M:%S.%f')
+        timediff = np.abs(time2-time1).total_seconds()/60.0
+
+        if (timediff <= -maxgap * cadence) & (timediff >= (cadence-5)):
+            print(time1,time2)
+            crval = [headers[i]['crval1a'],headers[i]['crval2a']]
+
+            center = [headers[i+1]['crpix1'] - 1, headers[i+1]['crpix2'] - 1]
+
+            wcoord = wcs.WCS(headers[i+1], key='A')
+            center2 = wcoord.all_world2pix(crval[0], crval[1], 0)
+
+            # Determine shift between preceding and following image
+            xshift = center2[0] - center[0]
+            yshift = center2[1] - center[1]
+            
+            shiftarr = [yshift, xshift]
+
+            print(shiftarr)
+
+            shifted = shift(data[i].copy(), shiftarr, mode='nearest')
+            diff = np.float32(data[i+1].copy()-shifted)
+            diff2 = np.float32(data[i+1].copy()-data[i])
+            diff = cv2.medianBlur(diff, 3)
+            diff2 = cv2.medianBlur(diff2, 3)
+
+
+            fig,ax = plt.subplots(1,4)
+            ax[0].imshow(data[i])
+            ax[1].imshow(data[i+1])
+            ax[2].imshow(diff,vmin=np.nanmedian(diff)-5.0*np.std(diff),vmax =np.nanmedian(diff)+5.0*np.std(diff),cmap="gray")
+            ax[3].imshow(diff2,vmin=np.nanmedian(diff2)-np.std(diff2),vmax =np.nanmedian(diff2)+np.std(diff2),cmap="gray")
+            plt.show()
+                        # 
+            # ndat = np.float32(data[i] - ims[j])
