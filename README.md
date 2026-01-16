@@ -7,13 +7,16 @@ Refactor of the code from https://github.com/maikebauer/STEREO-HI-Data-Processin
 
 ### COR2
 
-Most of COR2 reduction is working and implemented, missing calibration
+Most of COR2 reduction is working and implemented and working, produces nice images, calfac and calimg have to be done separately to use provide monthly min backgrounds
 
 
 ## LASCO
 
 ### C3
-Working on having C3 working fully, nearly at the end of Reduce_L1.pro 
+Working for most examples, not 100% tested
+
+### C2
+Working nearly fully, does not handle polarized sequences
 
 
 Will add soon how to use code, one can look at config.yaml for an idea and use: python main.py config.yaml to execute reduction and downloading. (Might have to download pointing files and calibration for HI manually for now).
