@@ -13,18 +13,24 @@ from collections import Counter
 from natsort import natsorted 
 from scipy.ndimage import shift
 import cv2 
-
+import time 
+import warnings
+warnings.filterwarnings("ignore")
 
 def ignore_extended_attributes(func, filename, exc_info):
     is_meta_file = os.path.basename(filename).startswith("._")
     if not (func is os.unlink and is_meta_file):
         raise
 
-def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silent=False,polarized=False):
+def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silent=False,polarized=False,remove_background=False):
         
+        start = time.time()
         for i in range(len(hdul_data)):
             hdul_header[i] = fix_secchi_hdr(hdul_header[i])
+        
 
+
+        # start = time.time()
         ## CHANGE rectify inserted here
         for i in range(len(hdul_data)):
             if hdul_header[i]['rectify'] != True:
@@ -37,7 +43,7 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
 
         rectify_on =  True
         precomcorrect_on = False
-
+        # print("rectify", time.time()-start)
      
 
         if precomcorrect_on == False:
@@ -59,7 +65,7 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
                     hdul_header[i]['EXPTIME'] = np.sum(xh['EXPTIME'])
 
                 hdul_data[i], hdul_header[i] = precommcorrect(hdul_data[i], hdul_header[i], silent=silent)
-        
+ 
         if bflag == 'science':
             if ins == 'hi_1':
                 norm_img = 30
@@ -82,12 +88,13 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
     
         n_images = [hdul_header[i]['n_images'] for i in range(len(hdul_header))]
 
-        if not all(val == norm_img for val in n_images):
+        if not all(val == norm_img for val in n_images) and ins!='cor2':
 
             bad_ind = [i for i in range(len(n_images)) if (n_images[i] != norm_img) and (n_images[i] != acc_img)]
             bad_img+=bad_ind
 
- 
+
+
         crval1_test = [int(np.sign(hdul_header[i]['crval1'])) for i in range(len(hdul_header))]
 
         if len(set(crval1_test)) > 1 and ins!="cor2":
@@ -167,7 +174,7 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
             else:
                 hdul[i].close()
         
-        clean_data = np.array(clean_data, dtype=np.float32)
+        # clean_data = np.array(clean_data, dtype=np.float32)
 
         if bflag == 'beacon':
             for i in range(len(clean_header)):
@@ -182,8 +189,8 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
             post_conj = [int(-1*np.sign(crval1[i])) for i in range(len(crval1))]
         
         if len(clean_header) == 0:
-            print('No clean files found for ', ins, ' on ',  hdul_header[len(hdul_header)-1]["DATE-END"][:4])
-            return [], []
+            print('No clean files found')
+            return [], [], [], []
 
         if(ins!='cor2'):
             if len(set(post_conj)) == 1 :
@@ -201,12 +208,13 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
         
         trim_off = False
         
-        
+        # start = time.time()
         if trim_off == False:
             for i in range(len(clean_data)):
                 clean_data[i], clean_header[i]= scc_img_trim(clean_data[i], clean_header[i], silent=silent)
-                
-        # print("time sorting bad and good data",time.time()-start_time)
+        # print("scc_img trim", time.time()-start)
+
+
         ### is it really  unecessary ? 
         # for i in range(len(clean_data)):
         #     clean_data[i], clean_header[i] = scc_putin_array(clean_data[i], clean_header[i], 1024,trim_off=trim_off, silent=silent)
@@ -214,19 +222,17 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
         ## TODO: Implement discri_pobj.pro
 
         ## TODO: Implement EUVI_PREP.pro
-
         if ins=='cor2':
-            print(post_conj)
             for i in range(len(clean_data)):
                 clean_data[i], clean_header[i]  = cor_prep(clean_data[i], clean_header[i], post_conj[i], calpath, pointpath,ftpsc)
-
+               
+       
             if(polarized):
                 pbs = []
                 Bs = []
                 hdr_pbs = []
                 hdr_Bs = []
                 polars = [clean_header[i]["POLAR"] for i in range(0,len(clean_header))]
-                print(polars)
                 for i in range(0,len(clean_data),3):
                     try: 
                         pbim,B, hdr_pb,hdr_B = cor_polariz_python([clean_header[i],clean_header[i+1],clean_header[i+2]], [clean_data[i],clean_data[i+1],clean_data[i+2]])
@@ -245,7 +251,7 @@ def reduction(hdul,hdul_data,hdul_header,ftpsc,ins,bflag,calpath,pointpath,silen
                 return pbs, hdr_pbs, Bs, hdr_Bs 
             else:
                 # Bs, hdr_bs = cor_calfac(clean_data,clean_header)
-                return clean_data,clean_header
+                return clean_data,clean_header,None,None
             
 
 
@@ -310,7 +316,7 @@ scs = {
     'SB': 'behind',
 }
 
-def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
+def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True,background=False):
 
     if not silent:
         print('----------------')
@@ -328,7 +334,7 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
     
 
         if ins=="cor2" and bflag == "science":
-            suffix = ['/*n4*.fts','/*d4*.fts']
+            suffix = ['/*n4*.fts','/*d4*.fts','/*pTBr*.fts']
         elif (ins=="hi_1" or ins=="hi_2") and bflag == "beacon":
             suffix = ['/*s7*.fts']
         else:
@@ -337,19 +343,22 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
         
         fitsfiles = []
         
-
-        for s in suffix:
-            for file in sorted(glob.glob(savepath.replace("L1","L0") + s)):
-                fitsfiles.append(file)
-            
+        if (background==False):
+            for s in suffix:
+                for file in sorted(glob.glob(savepath.replace("L1","L0") + s)):
+                    fitsfiles.append(file)
+        else:
+            for s in suffix:
+                for file in sorted(glob.glob(path + s)):
+                    fitsfiles.append(file)
 
 
         if len(fitsfiles) == 0:  
-            print('No files found for ', ins, ' on ', hdul_header[len(hdul_header)-1]["DATE-END"][:4])
+            print('No files found for ', ins, ' on ', datelist[d] ,savepath.replace("L1","L0") + s)
             continue
         
        
-        #if there was already something in the folder, we remove it all and restart from scratch 
+        # if there was already something in the folder, we remove it all and restart from scratch 
         print(savepath + '/')
         if os.path.exists(savepath + '/'):
             shutil.rmtree(savepath + '/',onerror=ignore_extended_attributes)
@@ -374,8 +383,17 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
         hdul_header2 = []
         hduls2 = []
         for i in range(len(fitsfiles)):
-            hdul = fits.open(fitsfiles[i])
-            if(len(hdul)>1):
+            try:
+                hdul = fits.open(fitsfiles[i])
+            except:
+                print("corrupted file",fitsfiles[i])
+                continue
+            try:
+                lenght_hudls = len(hdul)
+            except:
+                print("fucked header, sometimes it do be like that")
+                continue
+            if(lenght_hudls>=1):
                 if( 'd4' in fitsfiles[i]):
                     
                     try:
@@ -386,32 +404,92 @@ def data_reduction(datelist, path, datpath, ftpsc, ins, bflag, silent=True):
                     except TypeError:
                         print('Error reading file ', fitsfiles[i]) #happens if file is truncated, smaller than expected
                         continue
+
+                elif( 'pTBr' in fitsfiles[i]): 
+                    try:
+                        if(hdul[0].data.shape[0]==1024):
+                            hduls2.append(hdul)
+                            hdul_data2.append(hdul[0].data)
+                            hdul_header2.append(hdul[0].header)
+                    except TypeError:
+                        print('Error reading file ', fitsfiles[i]) #happens if file is truncated, smaller than expected
+                        continue
                 else:
                     hduls.append(hdul)
                     try:
-                        hdul_data.append(hdul[0].data)
-                        hdul_header.append(hdul[0].header)
+                        if(hdul[0].data is not None):
+                            hdul_data.append(hdul[0].data)
+                            hdul_header.append(hdul[0].header)
                     except TypeError:
                         print('Error reading file ', fitsfiles[i]) #happens if file is truncated, smaller than expected
                     continue
-       
-        hdul_data = np.array(hdul_data)
-        hdul_data2 = np.array(hdul_data2)
+   
+        # hdul_data = np.array(hdul_data)
+        # hdul_data2 = np.array(hdul_data2)
+
 
         if ins=="cor2":
             pbs, hdr_pbs, Bs, hdr_Bs = reduction(hduls,hdul_data,hdul_header,ftpsc[-1],ins,bflag,calpath,pointpath,silent=True,polarized=True)
             
+
+            # scalemin = 0	;2e-13
+            # scalemax = 6.5e-9         
+            # bscale = (scalemax-scalemin)/65536
+            # bzero=bscale*32769
+            # help,bscale,bzero
+            
+            savepolarized = False
+
+
             for i in range(0,len(pbs)):
-                primary_hdu = fits.PrimaryHDU(data=pbs[i],header=hdr_pbs[i])
-                totalbrightness_Hhdu = fits.ImageHDU(data=Bs[i],header=hdr_Bs[i])
-                hdul = fits.HDUList([primary_hdu, totalbrightness_Hhdu])
-                newname = datetime.strptime(hdr_pbs[i]['DATE_AVG'], '%Y-%m-%dT%H:%M:%S.%f').strftime('%Y%m%d_%H%M%S') +'_c2l1_' + ftpsc + '.fts'
-                hdul.writeto(savepath +'/' + newname, output_verify='silentfix', overwrite=True)
+                
+                if savepolarized:
+                    primary_hdu = fits.PrimaryHDU(data=pbs[i],header=hdr_pbs[i])
+                    totalbrightness_Hhdu = fits.ImageHDU(data=Bs[i],header=hdr_Bs[i])
+   
+                    hdul = fits.HDUList([primary_hdu, totalbrightness_Hhdu])
+                    newname = datetime.strptime(hdr_pbs[i]['DATE_AVG'], '%Y-%m-%dT%H:%M:%S.%f').strftime('%Y%m%d_%H%M%S') +'_c2l1_' + ftpsc + '.fts'
+                    print(savepath + '/' + newname)
+                    hdul.writeto(savepath +'/' + newname, output_verify='silentfix', overwrite=True)
+                else:
+                    primary_hdu = fits.PrimaryHDU(data=Bs[i].astype(np.uint32),header=hdr_Bs[i])
+                    # scalemin = 0
+                    # scalemax = Bs[i].max()     
+                    # bscale = (scalemax-scalemin)/65536
+                    # bzero=bscale*32769
+
+                    # # primary_hdu.scale('uint32',bscale,bzero)
+                    # print(primary_hdu.data.dtype)
+                    # plt.imshow(primary_hdu.data)
+                    # plt.show()
 
 
-            Bs, hdr_Bs = reduction(hduls2,hdul_data2,hdul_header2,ftpsc[-1],ins,bflag,calpath,pointpath,silent=True,polarized=False)
-            for i in range(0,len(Bs)):
-                fits.writeto(savepath + '/' + hdr_Bs[i]['filename'], Bs[i].astype(np.float32), hdr_Bs[i], output_verify='silentfix', overwrite=True)
+                    hdul = fits.HDUList([primary_hdu])
+                    print(savepath + '/' + hdr_Bs[i]['filename'])
+                    hdul.writeto(savepath + '/' + hdr_Bs[i]['filename'], output_verify='silentfix', overwrite=True)
+                    
+
+            Bs, hdr_Bs,_,_ = reduction(hduls2,hdul_data2,hdul_header2,ftpsc[-1],ins,bflag,calpath,pointpath,silent=True,polarized=False)
+            for i in range(0,len(Bs)):     
+
+                print(savepath + '/' + hdr_Bs[i]['filename'])
+                # fits.writeto(savepath + '/' + hdr_Bs[i]['filename'], Bs[i].astype(np.float32), hdr_Bs[i], output_verify='silentfix', overwrite=True)
+
+                primary_hdu = fits.PrimaryHDU(data=Bs[i].astype(np.uint32),header=hdr_Bs[i])
+                # scalemin = 0
+                # scalemax = Bs[i].max()     
+                # bscale = (scalemax-scalemin)/65536
+                # bzero=bscale*32769
+
+                # primary_hdu.scale('uint32',bscale,bzero)
+               
+
+                hdul = fits.HDUList([primary_hdu])
+                print(savepath + '/' + hdr_Bs[i]['filename'])
+                hdul.writeto(savepath + '/' + hdr_Bs[i]['filename'], output_verify='silentfix', overwrite=True)
+
+                hdul = fits.open(savepath + '/' + hdr_Bs[i]['filename'])
+               
 
 
         else:

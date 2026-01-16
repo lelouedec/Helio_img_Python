@@ -1,7 +1,10 @@
 from datetime import datetime,timedelta
 from .secchi_functions import * 
 import  matplotlib.pyplot as plt 
-
+from skimage.transform import resize
+import time 
+from skimage.transform import warp, estimate_transform,AffineTransform
+import cv2 
 
 def cor_prep(data,header,post_conj, calpath, pointpath,ftpsc):
 
@@ -11,17 +14,28 @@ def cor_prep(data,header,post_conj, calpath, pointpath,ftpsc):
     ## chose mean, probably not the best choice but fuck it
     missing = scc_get_missing(header)
     if(header['MISSLIST'] != ''):
+        print(header['MISSLIST'],missing)
+        w,h =data.shape
+        data = data.flatten()
         data[missing] = np.nanmean(data)
+        data = data.reshape((w,h))
 
-    
+
+    # start = time.time()
     #COR2 calibrate
     data,header = cor_calibrate(data,header,post_conj,calpath)
+  
+    # print("calibrate", time.time()-start)
 
+    # start = time.time()
     data =  cor2_warp(data,header,ftpsc)
+
+
+    # print("cor2_warp", time.time()-start)
     # data,header = scc_roll_image(data,header)
 
     smask = get_smask(header, calpath, post_conj, silent=True)
-    data = smask * data
+    data = resize(smask,data.shape,preserve_range=True) * data
 
 
     if header["DETECTOR"] == 'COR2':
@@ -55,6 +69,7 @@ def cor_calibrate(data,header,post_conj,calpath,exptime_off=False,bias_off=False
         calimg = 1.0
     else:
         calimg,cal_version = get_calimg(header,calpath,post_conj)
+   
     if(calimg.shape[0]>1):
         header['HISTORY'] = 'Applied Vignetting '+ str(bias)
 
@@ -66,7 +81,7 @@ def cor_calibrate(data,header,post_conj,calpath,exptime_off=False,bias_off=False
     if calfac != 1.0:
         header['HISTORY'] = 'Applied Calibration Factor '+ str(calfac)
     
-    data = (data - bias)*calfac/exptime * calimg
+    data = ((data - bias)/exptime) #* calimg
     
     return data,header
 
@@ -222,7 +237,7 @@ def sun_center(header):
 
 def cor2_warp(data,header,sc):
     gridsize = 32
-    image_size = 2048
+    image_size = data.shape[0]
     n_cells = (image_size // gridsize) +1   # Same as ((2048/32)+1) = 65
 
     w = np.arange(n_cells ** 2)
@@ -259,10 +274,22 @@ def cor2_warp(data,header,sc):
     y0 = r0 * np.sin(theta) + yc
 
 
-    from skimage.transform import warp, estimate_transform
+    
+    # start = time.time()
+    # tform = estimate_transform('affine',np.vstack([x,y]).T, np.vstack([x0,y0]).T)
+    # print(" compute transform",time.time()-start)
+    # # Apply warp
+    # start = time.time()
+    # warped = warp(data, tform.inverse, output_shape=(2048,2048))
+    # print(" warp warp",time.time()-start)
 
-    tform = estimate_transform('affine',np.vstack([x,y]).T, np.vstack([x0,y0]).T)
-    # Apply warp
-    warped = warp(data, tform.inverse, output_shape=(2048,2048))
+    # start = time.time()
+    tfm, _ = cv2.estimateAffinePartial2D(np.vstack([x,y]).T, np.vstack([x0,y0]).T)
+    # print(" compute transform2",time.time()-start)
+    # start = time.time()
+    warped = cv2.warpAffine(data, tfm, (data.shape[0],data.shape[1]))
+    # print(" warp warp2",time.time()-start)
+
+  
 
     return warped

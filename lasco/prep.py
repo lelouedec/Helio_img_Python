@@ -13,16 +13,16 @@ matplotlib.use("Qt5Agg")
 
 
 
-def lasco_prep(dates,path,swdir,ins):
+def lasco_prep(dates,path,swdir,ins,background=False):
     calibfacdir = swdir+"soho/lasco/calib/"
 
     if not os.path.exists(calibfacdir):
         os.makedirs(calibfacdir)
 
     num_cpus = cpu_count()
-    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".dat",calibfacdir)
-    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".fts",calibfacdir)
-    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".txt",calibfacdir)
+    io_utils.multi_process_dl(num_cpus,"https://soho.nascom.nasa.gov/solarsoft/soho/lasco/lasco/data/calib/",".dat",calibfacdir)
+    io_utils.multi_process_dl(num_cpus,"https://soho.nascom.nasa.gov/solarsoft/soho/lasco/lasco/data/calib/",".fts",calibfacdir)
+    io_utils.multi_process_dl(num_cpus,"https://soho.nascom.nasa.gov/solarsoft/soho/lasco/lasco/data/calib/",".txt",calibfacdir)
 
     
 
@@ -30,23 +30,46 @@ def lasco_prep(dates,path,swdir,ins):
         savepath = path + d
 
         files_list = natsorted(glob.glob(path.replace("L1","L0")+str(d)+"/*"))
+        if background==True:
+            files_list = natsorted(glob.glob(path.replace("L1","L0")+"*"))
+
         for f in files_list:
             print(f)
             hdul = fits.open(f)
             data = hdul[0].data
+          
+            if(data is None):
+                print("this file was not right",f)
+                continue
+            
             header = hdul[0].header
 
-            xsumming = (header["SUMCOL"]>1)*(header["LEBXSUM"]>1)
-            ysumming = (header["SUMROW"]>1)*(header["LEBYSUM"]>1)
+            if header["LP_NUM"]!="Normal":
+                print("we do not handle polarized sequences")
+                continue
+
+            xsumming = max(header["SUMCOL"],1)*max(header["LEBXSUM"],1)
+            ysumming = max(header["SUMROW"],1)*max(header["LEBYSUM"],1)
             summing = xsumming*ysumming
 
             if(summing>1):
-                print("do something with it, fixwrap and dofull=0")
+                print("FixWrap")
+                out = data + (data < 0) * 0xFFFF
+                data = out + (out < 0) * 0xFFFF
 
-
+            try:
+                header ["R2COL"] = header ["R2COL"]
+            except:
+                # header.append(('R1COL', 20), end=True)
+                # header.append(('R2COL', 1024), end=True)
+                # header.append(('R1ROW', 1), end=True)
+                # header.append(('R2ROW', 1043), end=True)
+                print("no r2col")
+                exit()
 
             if header["R2COL"] - header["R1COL"] + header["R2ROW"] - header["R1ROW"] - 1023-1023 !=0:
                 #a = reduce_std_size(a,header,full=dofull)
+                print("there was a problem with the image size")
                 continue 
             fname = header["filename"]
             source = fname[1:2] 
@@ -73,7 +96,10 @@ def lasco_prep(dates,path,swdir,ins):
                 #     hdr.r2col=1043
                 #     hdr.r1row=1
                 #     hdr.r2row=1024
-                exit()
+                header["R1COL"] = 20
+                header["R2COL"] = 1043
+                header["R1ROW"] = 1
+                header["R2ROW"] = 1024
 
             outname=root+'.fts'
 
@@ -96,59 +122,83 @@ def lasco_prep(dates,path,swdir,ins):
 
             if ins=="C3":
                 if data.shape[0]==1024:
-                    data =  C3_CALIBRATE(data,header,swdir)
+                    data =  C3_CALIBRATE(data,header,swdir,background=background)
                     data = C3_warp(data,header)
+                  
+                    if(data is not None):
+                        
+                        # xnorm = 518.0		# IDL coordinates
+                        # ynorm = 531.5		# nbr, 27Jul00
+                        # mbstrings=1
+                        # plt.imshow(find_miss_blocks(data,header))
+                        # plt.show()
+                        # print(path+header["filename"])
+                        # exit()
+                    
+                        for i in range(0,len(header["history"])):
+                            header["history"][i] = header["history"][i].replace("\t","")
 
-                    # xnorm = 518.0		# IDL coordinates
-                    # ynorm = 531.5		# nbr, 27Jul00
-                    # mbstrings=1
-                    # plt.imshow(find_miss_blocks(data,header))
-                    # plt.show()
-                    # print(path+header["filename"])
-                    # exit()
-                
-                    for i in range(0,len(header["history"])):
-                        header["history"][i] = header["history"][i].replace("\t","")
-                
-                    if not os.path.exists(savepath):
-                        os.makedirs(savepath)
-                    fits.writeto(savepath+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
+                        if background:
+                            if not os.path.exists(path):
+                                os.makedirs(path)
+                            fits.writeto(path+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
+                        else:
+                    
+                            if not os.path.exists(savepath):
+                                os.makedirs(savepath)
+
+                            fits.writeto(savepath+"/bis_"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
             elif ins=="C2":
                 data =  C2_CALIBRATE(data,header,swdir)
+              
                 data = C2_warp(data,header)
-                # name_mask = get_cal_name('C3_cl*msk*.dat',yymmdd,swdir)
-                # mask_hdul = fits.open(name_mask)
-                # mask_data = mask_hdul[0].data
-                # mask_data = C2_warp(mask_data,header)
-               
-                zz = np.where(data <= 0)
-                maskall = np.ones((header["NAXIS1"],header["NAXIS2"]))
-                print(maskall.shape)
-                # Check if there is more than one index
-                if zz[0].size > 1:     
-                    maskall[zz] = 0.0 
-
-                cols = data.shape[1] // 32
-                rows = data.shape[0] // 32
                 
-                # Replace REBIN with a proper resizing function
-                data2 = resize(data, (rows, cols))
-                zblocks = np.where(data2 <= 0)
-                if zblocks[0].size>0:
-                    if summing >1:
-                        nmissing = zblocks[0].size - 8
+                if(data is not None):
+                    # name_mask = get_cal_name('C3_cl*msk*.dat',yymmdd,swdir)
+                    # mask_hdul = fits.open(name_mask)
+                    # mask_data = mask_hdul[0].data
+                    # mask_data = C2_warp(mask_data,header)
+                    if background!=True:
+                        print("removing null blocks")
+                        zz = np.where(data <= 0)
+                        maskall = np.ones((header["NAXIS1"],header["NAXIS2"]))
+                        # Check if there is more than one index
+                        if zz[0].size > 1:     
+                            maskall[zz] = 0.0 
+
+                        cols = data.shape[1] // 32
+                        rows = data.shape[0] // 32
+                        
+                        # Replace REBIN with a proper resizing function
+                        data2 = resize(data, (rows, cols),preserve_range=True)
+                        zblocks = np.where(data2 <= 0)
+                        nmissing = 0
+                        if zblocks[0].size>0:
+                            if summing >1:
+                                nmissing = zblocks[0].size - 8
+                            else:
+                                nmissing = zblocks[0].size
+                        if(nmissing>17):
+                            # maskall = np.ones((32,32))
+                            # maskall[zblocks] = 0.0
+                            # maskall = resize(maskall,(1024,1024),preserve_range=True)
+                            maskall = C2_warp(maskall,header)
+                            maskall[maskall<0] = 0.0
+                            maskall = maskall.astype(np.uint8)
+                            maskall[maskall!=0] = 1
+                            data[maskall] = np.nanmedian(data)
+                    
+                    
+                    if background:
+                        if not os.path.exists(path):
+                            os.makedirs(path)
+                        fits.writeto(path+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
                     else:
-                        nmissing = zblocks[0].size
-                if(nmissing>17):
-                    # maskall = np.ones((32,32))
-                    # maskall[zblocks] = 0.0
-                    # maskall = resize(maskall,(1024,1024))
-                    maskall = C2_warp(maskall,header)
-                    maskall[maskall<0] = 0.0
-                data = data*maskall
-                if not os.path.exists(savepath):
-                    os.makedirs(savepath)
-                fits.writeto(savepath+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
+
+                        if not os.path.exists(savepath):
+                            os.makedirs(savepath)
+
+                        fits.writeto(savepath+"/"+outname,data.astype(np.float32), header, output_verify='ignore', overwrite=True)
 
 
 

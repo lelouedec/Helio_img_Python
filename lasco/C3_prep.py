@@ -7,6 +7,7 @@ from .lasco_utils import *
 from astropy.time import Time
 from astropy.io import fits 
 
+import matplotlib.pyplot as plt 
 
 
 
@@ -107,7 +108,7 @@ def C3_calfactor(header,NOSUM=False):
     return cal_factor
 
 
-def C3_CALIBRATE(data,header,swdir,no_calfac=False,fuzzy=False):
+def C3_CALIBRATE(data,header,swdir,no_calfac=False,fuzzy=False,background=False):
     valid,exp_factor,exp_bias = GET_EXP_FACTOR(header,swdir)
     header["EXPTIME"] = exp_factor * header["EXPTIME"]
     header["offset"]  = exp_bias
@@ -129,9 +130,9 @@ def C3_CALIBRATE(data,header,swdir,no_calfac=False,fuzzy=False):
     if not os.path.exists(calibfacdir):
         os.makedirs(calibfacdir)
 
-    num_cpus = cpu_count()
-    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".dat",calibfacdir)
-    io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".fts",calibfacdir)
+    # num_cpus = cpu_count()
+    # io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".dat",calibfacdir)
+    # io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/data/calib/",".fts",calibfacdir)
 
     vig_fn = ''
     if mjd<51000:
@@ -170,16 +171,16 @@ def C3_CALIBRATE(data,header,swdir,no_calfac=False,fuzzy=False):
             rows = vig.shape[0] // 2
             
             # Replace REBIN with a proper resizing function
-            vig = np.resize(vig, (rows, cols))
-            ramp = np.resize(ramp, (rows, cols))
-            mask = np.resize(mask, (rows, cols))
-            bkg = np.resize(bkg, (rows, cols))
+            vig = np.resize(vig, (rows, cols),preserve_range=True)
+            ramp = np.resize(ramp, (rows, cols),preserve_range=True)
+            mask = np.resize(mask, (rows, cols),preserve_range=True)
+            bkg = np.resize(bkg, (rows, cols),preserve_range=True)
 
 
-    if header["FILEORIG"] == 0: #monthly image
+    if background: #monthly image
         data = data/header["exptime"]
         data = data*calfac*vig - ramp
-        return data 
+        return data * mask
 
     if (header["FILTER"] != 'Clear'):
         ramp = 0 
@@ -235,8 +236,12 @@ def C3_warp(data,header):
 
 
 
-    xc, yc = sun_center(header)
-
+    try:
+        xc, yc = sun_center(header)
+        if xc <0 or yc<0:
+            xc,yc = 516.284,529.489
+    except:
+        return None 
 
     x1 = header["R1COL"]-20
     x2 = header["R2COL"]-20
@@ -282,5 +287,7 @@ def C3_warp(data,header):
     warped = warp(data, tform.inverse, output_shape=(1024,1024),order=1)
     
     warped = warped[x1:x2,y1:y2]
+
+
 
     return warped

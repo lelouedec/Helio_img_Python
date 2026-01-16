@@ -4,9 +4,12 @@ import sys
 import numpy as np 
 from astropy.io import fits
 from scipy.ndimage import zoom
-from datetime import datetime
+from datetime import datetime,timedelta
 import matplotlib.pyplot as plt 
-
+from natsort import natsorted
+import glob 
+from skimage.transform import resize
+from PIL import Image
 
 
 
@@ -493,26 +496,23 @@ def secchi_rectify(a, scch, hdr=None, norotate=False, silent=True):
                 sys.exit()
 
             elif scch['detector'] == 'COR2':
-                # b = np.rot90(a, 1)
-                # stch['r1row'] = scch['p1col']
-                # stch['r2row'] = scch['p2col']
-                # stch['r1col'] = 2176 - scch['p2row'] + 1
-                # stch['r2col'] = 2176 - scch['p1row'] + 1
-                # stch['crpix1'] = scch['naxis2'] - scch['crpix2'] + 1
-                # stch['crpix2'] = scch['crpix1']
-                # stch['naxis1'], stch['naxis2'] = scch['naxis2'], scch['naxis1']
-                # stch['sumrow'] = scch['sumcol']
-                # stch['sumcol'] = scch['sumrow']
-                # stch['rectrota'] = 1
-                # rotcmt = 'rotate 90 deg CCW'
-                # stch['dstart1'] = max(1, 129 - stch['r1col'] + 1)
-                # stch['dstop1'] = stch['dstart1'] - 1 + min((stch['r2col'] - stch['r1col'] + 1), 2048)
-                # stch['dstart2'] = max(1, 51 - stch['r1row'] + 1)
-                # stch['dstop2'] = stch['dstart2'] - 1 + min((stch['r2row'] - stch['r1row'] + 1), 2048)
-
-                print('Rectify not implemented for COR2')
-                sys.exit()
-
+                b = np.rot90(a, 1)
+                stch['r1row'] = scch['p1col']
+                stch['r2row'] = scch['p2col']
+                stch['r1col'] = 2176 - scch['p2row'] + 1
+                stch['r2col'] = 2176 - scch['p1row'] + 1
+                stch['crpix1'] = scch['naxis2'] - scch['crpix2'] + 1
+                stch['crpix2'] = scch['crpix1']
+                stch['naxis1'], stch['naxis2'] = scch['naxis2'], scch['naxis1']
+                stch['sumrow'] = scch['sumcol']
+                stch['sumcol'] = scch['sumrow']
+                stch['rectrota'] = 1
+                rotcmt = 'rotate 90 deg CCW'
+                stch['dstart1'] = max(1, 129 - stch['r1col'] + 1)
+                stch['dstop1'] = stch['dstart1'] - 1 + min((stch['r2col'] - stch['r1col'] + 1), 2048)
+                stch['dstart2'] = max(1, 51 - stch['r1row'] + 1)
+                stch['dstop2'] = stch['dstart2'] - 1 + min((stch['r2row'] - stch['r1row'] + 1), 2048)
+                print("--------")
             elif scch['detector'] in ['HI1', 'HI2']:
                 b = a  # no change
                 stch['r1row'] = scch['p1row']
@@ -1083,7 +1083,7 @@ def scc_img_trim(im, header, silent=True):
     y1 = header['DSTART2'] - 1
     y2 = header['DSTOP2'] - 1
 
-    img = im[x1:x2 + 1, y1:y2 + 1]
+    img = im[y1:y2 + 1,x1:x2 + 1]
 
     s = np.shape(img)
 
@@ -1478,7 +1478,8 @@ def get_smask(hdr, calpath, post_conj, silent=True):
     if date_header>=date_1 and date_header<date_2 and hdr['DETECTOR'] != 'EUVI':
         fullm = np.rot90(fullm, 2)
 
-    mask = rebin(fullm[hdr['R1ROW']-1:hdr['R2ROW'],hdr['R1COL']-1:hdr['R2COL']], (hdr['NAXIS1'], hdr['NAXIS2']))
+    mask = rebin(fullm[int(hdr['R1ROW'])-1:int(hdr['R2ROW']),
+                       int(hdr['R1COL'])-1:int(hdr['R2COL'])], (hdr['NAXIS1'], hdr['NAXIS2']))
 
    
 
@@ -2174,3 +2175,71 @@ def sc_inverse(n, diag, below, above):
 
    
     return p
+
+def load_and_remove_background(dates,path,spc):
+    # dates_one,"/Volumes/Data_drive/data_maike/L1/SA/cor2/science/",time_215=datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+    background_date = datetime.strptime(dates[0], '%Y%m%d')-timedelta(hours=1)
+
+    backround_file   = "/Volumes/Data_drive/data/backgrounds/cor2/20080102/dc2"+spc+"_pTBr_"+background_date.strftime('%y%m%d')+".fts"
+    print(backround_file)
+    try:
+        background = fits.open(backround_file)
+    except:
+        print("couldnt load background")
+        return 
+    background_data = background[0].data
+    background_header = background[0].header
+
+    print(background_header["EXPTIME"])
+
+    datas = []
+    dates_jplot = []
+    for d in dates:
+        loadpath = path + d
+        files = natsorted(glob.glob(loadpath+"/*"))
+        prev = None
+        for i in range(0,len(files)):
+            hdul = fits.open(files[i])
+            header = hdul[0].header
+            if header["EXPTIME"]!=-1:
+                data = hdul[0].data
+
+                calimg,_ = get_calimg(hdul[0].header,'SolarSoftWare/stereo/secchi/calibration/',False)
+                calfac,_ = get_calfac(hdul[0].header)
+
+
+                background_data = resize(background_data,(data.shape[0],data.shape[1]),preserve_range=True)
+                data = np.nan_to_num(data,np.nanmedian(data),np.nanmedian(data))
+                data_l2 = (data - background_data)  #* calimg * calfac 
+
+
+                if not prev is None :
+  
+                    
+                    mask = get_smask(header,'SolarSoftWare/stereo/secchi/calibration/',False)
+           
+
+                    data3 = data_l2 - prev 
+                    data3 = data3 * mask
+
+                    vmin = np.median(data3)-np.std(data3)
+                    vmax = np.median(data3)+np.std(data3)
+
+                    data3[data3>vmax] = vmax 
+                    data3[data3<vmin] = vmin 
+                    data3 = (data3-vmin)/(vmax-vmin)
+                    data3 = resize(data3,(512,512),preserve_range=True)
+                    
+                    # print(files[i])
+                    # fig,ax = plt.subplots(1,3)
+                    # ax[0].imshow(data3,cmap="gray")
+                    # ax[1].imshow(background_data,vmin= np.median(background_data)-np.std(background_data),vmax= np.median(background_data)+np.std(background_data),cmap="gray")
+                    # ax[2].imshow(data_l2,vmin= np.median(data_l2)-np.std(data_l2),vmax= np.median(data_l2)+np.std(data_l2),cmap="gray")
+                    # plt.show()
+
+                    # datas.append(data3[1024-64:1024+64,:])
+                    # dates_jplot.append(datetime.strptime(header["DATE-OBS"],'%Y-%m-%dT%H:%M:%S.%f'))
+                    img = Image.fromarray((data3*255.0).astype(np.uint8))
+                    img.save("/Volumes/Data_drive/data/pngs/S"+spc+"/"+files[i].split("/")[-1][:-4]+".png")
+
+                prev = data_l2 

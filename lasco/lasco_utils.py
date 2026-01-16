@@ -1,6 +1,6 @@
 import math 
 import astropy.time
-from datetime import datetime
+from datetime import datetime,timedelta
 from scipy.ndimage import zoom
 import numpy as np 
 import os 
@@ -9,6 +9,7 @@ from multiprocessing import cpu_count
 from astropy.time import Time
 from astropy import wcs
 import glob 
+from skimage.transform import resize
 
 
 def poly(x, coeff):
@@ -17,7 +18,10 @@ def poly(x, coeff):
 
 def offset_bias(header,readport,telescope,summm=False):
     
-    time = astropy.time.Time(datetime.strptime(header["date"], "%Y/%m/%d %H:%M:%S.%f"),format='datetime', scale='utc')
+    if len (header["date"])<12:
+        time = astropy.time.Time(datetime.strptime(header["date"], "%Y-%m-%d"),format='datetime', scale='utc')
+    else:
+        time = astropy.time.Time(datetime.strptime(header["date"], "%Y/%m/%d %H:%M:%S.%f"),format='datetime', scale='utc')
     mjd = time.mjd
     port = readport.upper()
     tel = telescope.upper()
@@ -146,7 +150,7 @@ def offset_bias(header,readport,telescope,summm=False):
             b = 844
 
     if summm:
-        lebsum = max(header["lebxum"],1) * max(header["lebyum"],1)
+        lebsum = max(header["lebxsum"],1) * max(header["lebysum"],1)
         b = lebsum*b
     return b 
 
@@ -190,10 +194,27 @@ def get_sec_pixel(header,full=None):
     detector = header["detector"]
 
     #skip all the verifications of header and which spacecraft, lets just assume it is called correctly 
+    cam = ['C1', 'C2', 'C3', 'EIT', 'MK3', 'MK4']
 
-    sec_pix = substense(detector)
+    try:
+        tel = cam.index(detector)
+    except ValueError:
+        tel = -1
+
+    if tel < 0:
+        sec_pix = header.cdelt1
+
+    elif tel < 4:
+        sec_pix = substense(detector)
+
+
+
+    
     if full is not None:
-        factor = (1024.0 / float(full))
+        if tel < 4:
+            factor = 1024.0 / float(full)
+        else:
+            factor = 960.0 / float(full)
         return sec_pix * factor
     
 
@@ -567,12 +588,20 @@ def get_tmask(camera,rebin_index):
 
     return imsk
 
+def mjd_to_yymmdd(mjd):
+    mjd_epoch = datetime(1858, 11, 17)
+    dt = mjd_epoch + timedelta(days=mjd)
+    return dt.strftime("%y%m%d")
+
 
 def GET_EXP_FACTOR(header,swdir):
 
     tel  = header["DETECTOR"].lower()
-    yymmdd = header["FILEORIG"].split("_")[0]
-    result = read_exp_factor(tel, yymmdd, dir=swdir)
+    # yymmdd = header["FILEORIG"].split("_")[0]
+    dte_mjd  = header["mid_date"]
+    yymmdd = mjd_to_yymmdd(dte_mjd)[:6]
+
+    result,result_dict = read_exp_factor(tel, yymmdd, dir=swdir)
     
     
    
@@ -581,10 +610,11 @@ def GET_EXP_FACTOR(header,swdir):
     exp_sig = 0.0
     nreg = 0
 
-
+    nw = 0
     # Find matches in hdr.mid_date
-    wd = np.where(header['MID_DATE'] == result["mjd"])[0]
-    nw = len(wd)
+    if(result!=-1):
+        wd = np.where(header['MID_DATE'] == result_dict["mjd"])[0]
+        nw = len(wd)
 
 
     if result == -1 or nw == 0:
@@ -594,7 +624,7 @@ def GET_EXP_FACTOR(header,swdir):
 
 
     # # Time difference (ms)
-    deltime = np.array(1000.0 * header['MID_TIME'], dtype=np.int64) - result["time"][wd]
+    deltime = np.array(1000.0 * header['MID_TIME'], dtype=np.int64) - result_dict["time"][wd]
     # Where delta time is less than 100 ms
     wt = np.where(np.abs(deltime) < 100)[0]
     nw = len(wt)
@@ -614,10 +644,10 @@ def GET_EXP_FACTOR(header,swdir):
 
     # Matching entry
     index = wd[wt[0]]
-    exp_factor = result["factor"][index]
-    exp_bias = result["bias"][index]
-    nreg = result["nregion"][index]
-    exp_sig = result["sigma"][index]
+    exp_factor = result_dict["factor"][index]
+    exp_bias = result_dict["bias"][index]
+    nreg = result_dict["nregion"][index]
+    exp_sig = result_dict["sigma"][index]
 
     # Warn if no exposure correction
     if nreg == 0 or nreg == 97:
@@ -637,13 +667,13 @@ def read_exp_factor(detector,yymmdd,dir):
         os.makedirs(expfacdir)
         if not os.path.exists(filename):
             num_cpus = cpu_count()
-            io_utils.multi_process_dl(num_cpus,"https://hesperia.gsfc.nasa.gov/ssw/soho/lasco/lasco/expfac/data/"+yymmdd[:-2]+"/",".dat",expfacdir)
+            io_utils.multi_process_dl(num_cpus,"https://soho.nascom.nasa.gov/solarsoft/soho/lasco/lasco/expfac/data/"+yymmdd[:-2]+"/",".dat",expfacdir)
 
     
 
     if not os.path.exists(filename):
         print(f"File not found: {filename}")
-        return -1
+        return -1,None
 
      # Define arrays
     nsize = 1000
@@ -732,7 +762,7 @@ def read_exp_factor(detector,yymmdd,dir):
 
     
 
-    return {
+    return 0,{
         "fname": fname,
         "factor": factor,
         "bias": bias,
@@ -775,4 +805,123 @@ def get_cal_name(strg,yymmdd,calpath):
         if(int(date)<=int(yymmdd)):
            yymmdds.append(f)
     return yymmdds[-1]
+
+
+def reduce_std_size(data,hdr,nocal=False,norebin=False,full=True):
+    sumrow = max(hdr["SUMROW"] ,1)
+    sumcol = max(hdr["SUMCOL"] ,1)
+    lebxsum = max(hdr["lebxsum"] ,1)
+    lebysum = max(hdr["lebysum"] ,1)
+    naxis1 = hdr["NAXIS1"]
+    naxis2 = hdr["NAXIS2"]
+    polar = hdr["polar"]
+    tel = hdr["TELESCOP"]
+
+    r1col = hdr["R1COL"]
+    r1row = hdr["R1ROW"]
+    if r1col<1:
+        r1col = hdr["P1COL"]
+    
+    if r1row<1:
+        r1row = hdr["P1ROW"]
+
+    if not nocal:
+        abias = offset_bias(hdr,hdr["readport"],hdr["detector"], summm=True)
+
+        if sumcol> 1:
+            data = (data- abias)/(sumcol*sumrow)
+        elif lebxsum>1:
+            data = (data- abias)/(lebxsum*lebysum)
+
+
+    nxfac = 2**(sumcol+lebxsum-2)
+    nyfac = 2**(sumrow+lebysum-2)
+
+
+    if hdr["R2COL"]-r1col==1023 and hdr["R2ROW"]-r1row==1023 and naxis1==512:
+        nxfac = 2
+        nyfac = 2
+
+    nx = nxfac*naxis1
+    ny = nyfac*naxis2
+
+    if hdr["r2col"]-r1col +1 != naxis1*lebxsum:
+        r1col = r1col-32
+
+    if hdr["r2row"]-r1row +1 != naxis2*lebysum:
+        r1row = r1row-32
+
+    if (nx<1024) or ny<1024:
+        print("Handling subframes")
+        sz = data.shape[0]
+        full_img = np.zeros((1024//nxfac,1024//nyfac))
+        nx = min(sz,1024)
+        ny = min(sz,1024)
+
+        if nxfac<2 or nyfac<2:
+            naxis1 = 1024
+            naxis2 = 1024
+        else:
+            naxis1 = 512
+            naxis2 = 512
+
+        if r1row > 1024:
+            offrow=1
+        else:
+            offrow= r1row
+
+        if r1col <20:
+            startrow = (offrow-1)/nyfac
+            startrow = min(startrow,1024-ny)
+            full_img[startrow:,(r1col-1)/nxfac] = data[0:ny-1,0:nx-1]
+        else:
+            if ((r1col-20)/nxfac+(nx-1)>1024/nxfac ):
+                startcol=0
+            else:
+                startcol = (r1col-20)/nxfac
+
+            if (offrow-1)/nyfac+(ny-1) > 1024/nyfac:
+                startrow=0
+            else:
+                startrow = (offrow-1)/nyfac
+
+            full_img[startrow:,startcol:] = data[0:ny-1,0:nx-1]
+            hdr["CRPIX1"] = hdr["CRPIX1"] + (r1col-20)/nxfac
+            hdr["CRPIX2"] = hdr["CRPIX2"] + (offrow-1)/nyfac
+    else:
+        full_img = data
+
+    scale_to = 512
+
+    if norebin:
+        scale_to = naxis1
+
+    if full:
+        scale_to=1024
+
+    ## updating header 
+
+    if nocal:
+        hdr["CRPIX1"]=((hdr["CRPIX1"]*nxfac)+r1col-20)*scale_to/1024.
+        hdr["CRPIX2"]=((hdr["CRPIX2"]*nyfac)+r1row-1)*scale_to/1024.
+
+    hdr["R1COL"] = 20
+    hdr["R1ROW"] = 1
+    hdr["R2COL"] = 1043
+    hdr["R2ROW"] = 1024
+    # # hdr["lebxsum"]=1
+    # # hdr["lebysum"]=1
+    # # hdr["offset"] =0
+
+
+    hdr["NAXIS1"] = scale_to
+    hdr["NAXIS2"] = scale_to
+    hdr["cdelt1"]=hdr["cdelt1"]*(1024/scale_to)
+    hdr["cdelt2"]=hdr["cdelt2"]*(1024/scale_to)
+
+    data = resize(data,(scale_to,scale_to),preserve_range=True)
+
+    return data,hdr
+
+
 
