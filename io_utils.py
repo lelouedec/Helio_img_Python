@@ -12,6 +12,8 @@ import traceback
 import logging
 import sys 
 import tqdm
+from datetime import datetime,timedelta
+
 
 disable_warnings(InsecureRequestWarning)
 
@@ -22,11 +24,62 @@ scs = {
     'SO': 'something'
 }
 
-def multi_process_dl(num_cpus,url,ext,path_dir):
+
+
+
+def download_background(dates,instrument,path,spc):
+
+
+    if(instrument=='cor2'):
+        for d in dates:
+            url = "https://stereo-ssc.nascom.nasa.gov/pub/ins_data/secchi_backgrounds/"+spc.lower()+"/daily_med/"+d.strftime('%Y%m')+"/dc2"+spc+"_pTBr_"+d.strftime('%y%m%d')+".fts"
+            filename = url.split("/")[-1]
+            if not os.path.exists(path):
+                os.makedirs(path)
+            if not os.path.exists(path + '/' + filename):
+                r = requests.get(url, allow_redirects=True)
+                open(path + '/' + filename, 'wb').write(r.content)
+
+    elif instrument=='C2':
+        # 
+        for d in dates:
+            url = "https://lasco-www.nrl.navy.mil/content/retrieve/monthly"
+            urls = listfd(url, "2m_orcl_"+(d-timedelta(days=30)).strftime('%y%m')) + listfd(url, "2m_orcl_"+(d).strftime('%y%m')) + listfd(url, "2m_orcl_"+(d+timedelta(days=30)).strftime('%y%m'))
+            for url in urls:
+                filename = url[0]
+                if not os.path.exists(path):
+                    os.makedirs(path)
+                if not os.path.exists(path + '/' + filename):
+                    r = requests.get(url[1], allow_redirects=True)
+                    open(path + '/' + filename, 'wb').write(r.content)
+    elif instrument=='C3':
+        for d in dates:
+            url = "https://lasco-www.nrl.navy.mil/content/retrieve/monthly"
+            urls = listfd(url, "3m_clcl_"+(d-timedelta(days=30)).strftime('%y%m')) + listfd(url, "3m_clcl_"+d.strftime('%y%m')) + listfd(url, "3m_clcl_"+(d+timedelta(days=30)).strftime('%y%m'))
+            for url in urls:
+                filename = url[0]
+                if not os.path.exists(path):
+                    os.makedirs(path)
+                if not os.path.exists(path + '/' + filename):
+                    r = requests.get(url[1], allow_redirects=True)
+                    open(path + '/' + filename, 'wb').write(r.content) 
+
+
+
+def multi_process_dl(num_cpus,url,ext,path_dir,date_start=None,date_end=None):
     pool = Pool(int(num_cpus/2), limit_cpu)
 
     urls = listfd(url, ext)
-    inputs = zip(repeat(path_dir), urls)
+    urls2 = urls.copy()
+    if date_start!=None and date_end!=None:
+        urls2 = []
+        for u in urls:
+            date_u = datetime.strptime(u[0][:-10], '%Y%m%d_%H%M%S')
+            if(date_u>=date_start and date_u<=date_end):
+                urls2.append(u)
+        
+
+    inputs = zip(repeat(path_dir), urls2)
 
 
     try:
@@ -38,7 +91,7 @@ def multi_process_dl(num_cpus,url,ext,path_dir):
     pool.close()
     pool.join()
 
-def download_files(datelist, save_path, ftpsc, ins, bflag, silent=True):
+def download_files(datelist, save_path, ftpsc, ins, bflag,date_start=None,date_end=None, silent=True):
     """
     Downloads images from pub directory
 
@@ -106,6 +159,8 @@ def download_files(datelist, save_path, ftpsc, ins, bflag, silent=True):
                     ext = 'n4c2B.fts'
                     ext2 = 'd4c2B.fts'
             
+            # https://umbra.nascom.nasa.gov/pub/lasco/lastimage/level_05/260122/
+            # beacon lasco 
             elif ins == 'C3':
                 date_lasco = date[2:]
                 url  = "https://lasco-www.nrl.navy.mil/lz/level_05/"+str(date_lasco)+"/c3/"
@@ -120,10 +175,10 @@ def download_files(datelist, save_path, ftpsc, ins, bflag, silent=True):
             os.makedirs(path_dir)
         
         num_cpus = cpu_count()
-        multi_process_dl(num_cpus,url,ext,path_dir)
+        multi_process_dl(num_cpus,url,ext,path_dir,date_start,date_end)
 
         if(ins =='cor2'):
-            multi_process_dl(num_cpus,url2,ext2,path_dir)
+            multi_process_dl(num_cpus,url2,ext2,path_dir,date_start,date_end)
 
       
 def limit_cpu():
@@ -145,7 +200,7 @@ def listfd(input_url, extension):
     @param extension: File ending of STEREO-HI image files
     @return: List of URLs and corresponding filenames to be downloaded
     """
-
+    print(input_url,extension)
     disable_warnings(InsecureRequestWarning)
 
     
@@ -162,8 +217,8 @@ def listfd(input_url, extension):
     #page = requests.get(input_url, verify=False).text
 
     soup = BeautifulSoup(page, 'html.parser')
-    url_found = [input_url + '/' + node.get('href') for node in soup.find_all('a') if node.get('href').endswith(extension)]
-    filename = [node.get('href') for node in soup.find_all('a') if node.get('href').endswith(extension)]
+    url_found = [input_url + '/' + node.get('href') for node in soup.find_all('a') if extension in node.get('href')]
+    filename = [node.get('href') for node in soup.find_all('a') if extension in node.get('href')]
 
     for i in range(len(filename)):
         output_urls.append((filename[i], url_found[i]))
